@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Main where
 
@@ -17,6 +18,8 @@ import Data.Either
 import Data.Maybe
 
 class ToText a where toText :: a -> Text
+
+instance ToText Int where toText = T.pack . show
 
 -- -------------------------------------------------- Exiv / XMP
 
@@ -53,17 +56,34 @@ cmd2Args (SET k v) = T.intercalate " " ["set", toText k, toText v]
 cmd2Args (ADD k v) = T.intercalate " " ["add", toText k, toText v]
 cmd2Args (DEL k  ) = T.intercalate " " ["del", toText k]
 
-xmpCaption :: Text -> (XMPKey, XMPValue)
-xmpCaption = (,) (XMPKey "Xmp.dc.description") . XMPValue (Just LangAlt)
+xmp :: Text -- ^ tag name
+    -> XMPType -- ^ type
+    -> Text -- ^ value
+    -> (XMPKey, XMPValue)
+xmp tag typ val = ( (XMPKey tag)
+                  , (XMPValue (Just typ)) val
+                  )
 
-xmpTitle :: Text -> (XMPKey, XMPValue)
-xmpTitle = (,) (XMPKey "XMP.dc.title") . XMPValue (Just LangAlt)
+at :: Text -> Int -> Text
+at t i = t <> "[" <> toText i <> "]"
 
-xmpLabel :: Text -> (XMPKey, XMPValue)
-xmpLabel = (,) (XMPKey "XMP.xmp.Label") . XMPValue (Just XmpText)
+dc_caption :: Text -> (XMPKey, XMPValue)
+dc_caption = xmp "Xmp.dc.description" LangAlt
 
-xmpRating :: Int -> (XMPKey, XMPValue)
-xmpRating = (,) (XMPKey "XMP.xmp.Rating") . XMPValue (Just XmpText) . T.pack . show
+dc_title :: Text -> (XMPKey, XMPValue)
+dc_title = xmp "Xmp.dc.title" LangAlt
+
+xmp_Label :: Text -> (XMPKey, XMPValue)
+xmp_Label = xmp "Xmp.xmp.Label" XmpText
+
+xmp_Rating :: Int -> (XMPKey, XMPValue)
+xmp_Rating = xmp "XMP.xmp.Rating" XmpText . T.pack . show
+
+lr_HierarchicalSubject :: Text -> (XMPKey, XMPValue)
+lr_HierarchicalSubject = xmp "Xmp.lr.HierarchicalSubject" XmpText
+
+lr_hierarchicalSubject_composit :: Int -> Text -> (XMPKey, XMPValue)
+lr_hierarchicalSubject_composit i = xmp ("Xmp.lr.hierarchicalSubject["<> toText i <> "]") XmpText
 
 -- -------------------------------------------------- Picasa
 
@@ -104,8 +124,8 @@ picasaAlbum ini aid = PicasaAlbum <$> pure aid <*> name
     where name = lookupValue (".album:"<>aid) "name" ini
 
 
-loadPicasaMetadata :: FilePath -> IO [PicasaImage]
-loadPicasaMetadata picasa_ini_path = do
+loadPicasaImage :: FilePath -> IO [PicasaImage]
+loadPicasaImage picasa_ini_path = do
   path <- makeAbsolute picasa_ini_path
   let dirname = takeDirectory path
   files <- map (dirname</>) 
@@ -114,45 +134,55 @@ loadPicasaMetadata picasa_ini_path = do
   ini <- readIniFile path
   return $ rights $ either fail (\ini' -> map (picasaImage ini') files) ini
 
-picasaStar2cmd :: PicasaImage -> Maybe Exiv2ModifyCommand
+picasaStar2cmd :: PicasaImage -> Maybe [Exiv2ModifyCommand]
 picasaStar2cmd p = 
     if star $ metadata p
-    then Just $ uncurry SET $ xmpRating 5
+    then Just [uncurry SET $ xmp_Rating 5]
     else Nothing
 
-picasaAlbums2cmd :: Text -> PicasaImage -> Maybe Exiv2ModifyCommand
-picasaAlbums2cmd prefix = fmap (uncurry SET . xmpLabel)
-                          . toMaybe
-                          . T.intercalate ","
-                          . map toLabelText
-                          . albums . metadata
+picasaAlbums2cmd :: LightroomSettings -> PicasaImage -> Maybe [Exiv2ModifyCommand]
+picasaAlbums2cmd settings = wrapMaybe . concatMap mk . albums . metadata
     where
-      toLabelText :: PicasaAlbum -> Text
-      toLabelText a = prefix <> albumName a
+      mk :: PicasaAlbum -> [Exiv2ModifyCommand]
+      mk a = 
+        let tags = [albumPrefix settings, albumName a]
+            kwds = T.intercalate (hierarchySeparator settings) tags : tags
+        in concat [
+             [uncurry SET $ xmp "Xmp.lr.HierarchicalSubject" XmpText (albumPrefix settings)]
+           , [uncurry SET $ xmp "Xmp.dc.subject" XmpBag ""]
+           , zipWith (\ix tag -> uncurry SET $ xmp ("Xmp.dc.subject" `at` ix) XmpText tag) [1..] tags
+           , [uncurry SET $ xmp "Xmp.lr.hierarchicalSubject" XmpBag ""]
+           , zipWith (\ix kwd -> uncurry SET $ xmp ("Xmp.lr.hierarchicalSubject" `at` ix) XmpText kwd) [1..] kwds
+           ]
 
-      toMaybe :: Text -> Maybe Text
-      toMaybe t = if T.null t then Nothing else Just t
+      wrapMaybe :: [a] -> Maybe [a]
+      wrapMaybe l = if null l then Nothing else Just l
 
-data ConvertSettings = ConvertSettings {
+
+data LightroomSettings = LightroomSettings {
       albumPrefix :: Text
+    , hierarchySeparator :: Text
     } deriving (Eq, Show)
 
-defaultSettings :: ConvertSettings
-defaultSettings = ConvertSettings "album:"
+defaultSettings :: LightroomSettings
+defaultSettings = LightroomSettings {
+                    albumPrefix = "album"
+                  , hierarchySeparator = "|"
+                  }
 
-picasa2cmd :: ConvertSettings -> PicasaImage -> (FilePath, [Exiv2ModifyCommand])
+picasa2cmd :: LightroomSettings -> PicasaImage -> (FilePath, [Exiv2ModifyCommand])
 picasa2cmd s p = (,) (imagePath p) 
-                 $ catMaybes [
+                 $ concat $ catMaybes [
                    picasaStar2cmd p
-                 , picasaAlbums2cmd (albumPrefix s) p
+                 , picasaAlbums2cmd s p
                  ]
 
 
--- eval :: FilePath -> [Exiv2ModifyCommand] -> IO ()
--- eval imagePath = run
---     where
---       cmdline cmd = ["exiv2", "-M" <> cmd2Args cmd, imagePath ]
---       run cmd = 
+eval :: FilePath -> [Exiv2ModifyCommand] -> IO ()
+eval imagePath = run
+    where
+      cmdline cmd = ["exiv2", "-M" <> cmd2Args cmd, imagePath ]
+      run cmd = 
 
 main :: IO ()
 main = putStrLn "Hello"
