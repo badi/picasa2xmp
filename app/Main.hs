@@ -16,6 +16,7 @@ import Data.HashMap.Strict (HashMap)
 import Data.Monoid
 import Data.Either
 import Data.Maybe
+import System.Process
 
 class ToText a where toText :: a -> Text
 
@@ -23,12 +24,29 @@ instance ToText Int where toText = T.pack . show
 
 -- -------------------------------------------------- Exiv / XMP
 
+list :: a -> [a]
+list a = [a]
+
+flattenXmpValue :: XMPValue -> [Text]
+flattenXmpValue v = maybe [] (list . toText) (valueType v)  ++ txt
+    where txt = if T.null $ valueText v
+                then []
+                else [valueText v]
+
+eval :: Exiv2ModifyCommand -> String
+eval c = T.unpack 
+         $ T.intercalate " " 
+         $ case c of
+             SET k v -> ["set", unKey k] ++ flattenXmpValue v
+             ADD k v -> ["add", unKey k] ++ flattenXmpValue v
+             DEL k   -> ["del", unKey k]
+
 data Exiv2ModifyCommand = SET XMPKey XMPValue
                         | ADD XMPKey XMPValue
                         | DEL XMPKey
                           deriving (Eq, Show)
 
-newtype XMPKey = XMPKey Text
+newtype XMPKey = XMPKey {unKey :: Text}
     deriving (Eq, Show)
 
 instance ToText XMPKey where toText (XMPKey t) = t
@@ -42,7 +60,7 @@ data XMPType = XmpText
 
 instance ToText XMPType where toText = T.pack . show
 
-data XMPValue = XMPValue (Maybe XMPType) Text
+data XMPValue = XMPValue {valueType :: (Maybe XMPType) , valueText :: Text}
               deriving (Eq, Show)
 
 instance ToText XMPValue where
@@ -178,11 +196,11 @@ picasa2cmd s p = (,) (imagePath p)
                  ]
 
 
-eval :: FilePath -> [Exiv2ModifyCommand] -> IO ()
-eval imagePath = run
+run1cmd :: FilePath -> Exiv2ModifyCommand -> IO ()
+run1cmd imagePath cmd = run
     where
-      cmdline cmd = ["exiv2", "-M" <> cmd2Args cmd, imagePath ]
-      run cmd = 
+      args = ["-M" <> eval cmd, imagePath]
+      run = callProcess "exiv2" args
 
 main :: IO ()
 main = putStrLn "Hello"
