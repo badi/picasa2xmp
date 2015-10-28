@@ -226,7 +226,8 @@ run1cmd imagePath cmd = run
       run = callProcess "exiv2" args
 
 findDotPicasa :: FilePath -> P.Producer FilePath (SafeT IO) ()
-findDotPicasa prefix = find prefix (filename_ (==".picasa.ini") <> regular)
+findDotPicasa prefix = do
+  find prefix (filename_ (==".picasa.ini") <> regular)
 
 loadImages :: P.MonadIO m => P.Pipe FilePath PicasaImage m ()
 loadImages = forever $ do
@@ -257,9 +258,9 @@ collect = forever $ do
   result <- P.liftIO $ wait forked
   P.yield result
 
-main' :: LightroomSettings -> FilePath -> IO ()
-main' settings prefix = runSafeT $ P.runEffect $ do
-  findDotPicasa prefix 
+main' :: LightroomSettings -> [FilePath] -> IO ()
+main' settings prefixes = runSafeT $ P.runEffect $ do
+  P.for (P.each prefixes) findDotPicasa
   P.>-> loadImages
   P.>-> createCommands settings
   P.>-> updateFileAction
