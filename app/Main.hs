@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE FlexibleInstances #-}
 
 module Main where
@@ -7,16 +8,21 @@ import System.Directory
 import System.FilePath
 
 import Control.Monad
+import Control.Concurrent.Async
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Ini
-import Data.List
+--import Data.List
 import qualified Data.HashMap.Strict as H
 import Data.HashMap.Strict (HashMap)
 import Data.Monoid
 import Data.Either
 import Data.Maybe
 import System.Process
+import qualified Pipes as P
+import qualified Pipes.Prelude as P
+import Pipes.Safe (SafeT, runSafeT, MonadSafe)
+import Pipes.Files
 
 class ToText a where toText :: a -> Text
 
@@ -29,9 +35,7 @@ list a = [a]
 
 flattenXmpValue :: XMPValue -> [Text]
 flattenXmpValue v = maybe [] (list . toText) (valueType v)  ++ txt
-    where txt = if T.null $ valueText v
-                then []
-                else [valueText v]
+    where txt =  [T.concat ["'", valueText v, "'"]]
 
 eval :: Exiv2ModifyCommand -> String
 eval c = T.unpack 
@@ -84,6 +88,27 @@ xmp tag typ val = ( (XMPKey tag)
 
 at :: Text -> Int -> Text
 at t i = t <> "[" <> toText i <> "]"
+
+at' :: XMPKey -> Int -> XMPKey
+at' (XMPKey t) = XMPKey . at t
+
+bag :: Text -- ^ tag name
+    -> XMPType -- ^ value type
+    -> [Text] -- ^ values
+    -> (XMPKey, [XMPValue])
+bag tag typ vals = (k, vs)
+    where k  = XMPKey tag
+          vs = map (XMPValue (Just typ)) vals
+
+setBag :: Text -- ^ tag name
+       -> XMPType -- ^ value type
+       -> [Text] -- ^ values
+       -> [Exiv2ModifyCommand]
+setBag tag typ vals = 
+    let (key, vals') = bag tag typ vals
+        add i v = SET (key `at'` i) v
+    in SET key (XMPValue (Just XmpBag) "") 
+       : zipWith add [1..] vals'
 
 dc_caption :: Text -> (XMPKey, XMPValue)
 dc_caption = xmp "Xmp.dc.description" LangAlt
@@ -167,10 +192,8 @@ picasaAlbums2cmd settings = wrapMaybe . concatMap mk . albums . metadata
             kwds = T.intercalate (hierarchySeparator settings) tags : tags
         in concat [
              [uncurry SET $ xmp "Xmp.lr.HierarchicalSubject" XmpText (albumPrefix settings)]
-           , [uncurry SET $ xmp "Xmp.dc.subject" XmpBag ""]
-           , zipWith (\ix tag -> uncurry SET $ xmp ("Xmp.dc.subject" `at` ix) XmpText tag) [1..] tags
-           , [uncurry SET $ xmp "Xmp.lr.hierarchicalSubject" XmpBag ""]
-           , zipWith (\ix kwd -> uncurry SET $ xmp ("Xmp.lr.hierarchicalSubject" `at` ix) XmpText kwd) [1..] kwds
+           , setBag "Xmp.dc.subject" XmpText tags
+           , setBag "Xmp.lr.hierarchicalSubject" XmpText kwds
            ]
 
       wrapMaybe :: [a] -> Maybe [a]
@@ -201,6 +224,48 @@ run1cmd imagePath cmd = run
     where
       args = ["-M" <> eval cmd, imagePath]
       run = callProcess "exiv2" args
+
+findDotPicasa :: FilePath -> P.Producer FilePath (SafeT IO) ()
+findDotPicasa prefix = find prefix (filename_ (==".picasa.ini") <> regular)
+
+loadImages :: P.MonadIO m => P.Pipe FilePath PicasaImage m ()
+loadImages = forever $ do
+  path <- P.await
+  imgs <- P.liftIO $ loadPicasaImage path
+  mapM_ P.yield imgs
+
+createCommands :: P.MonadIO m => LightroomSettings -> P.Pipe PicasaImage (FilePath, [Exiv2ModifyCommand]) m ()
+createCommands settings = forever $ do
+  img <- P.await
+  let pair = picasa2cmd settings img
+  P.yield pair
+
+updateFileAction :: P.MonadIO m => P.Pipe (FilePath, [Exiv2ModifyCommand]) (IO ()) m ()
+updateFileAction = forever $ do
+  (path, cmds) <- P.await
+  P.yield $ mapM_ (run1cmd path) cmds
+
+doAsync :: P.MonadIO m => P.Pipe (IO a) (Async a) m ()
+doAsync = forever $ do
+  action <- P.await
+  forked <- P.liftIO $ async action
+  P.yield forked
+
+collect :: P.MonadIO m => P.Pipe (Async a) a m ()
+collect = forever $ do
+  forked <- P.await
+  result <- P.liftIO $ wait forked
+  P.yield result
+
+main' :: LightroomSettings -> FilePath -> IO ()
+main' settings prefix = runSafeT $ P.runEffect $ do
+  findDotPicasa prefix 
+  P.>-> loadImages
+  P.>-> createCommands settings
+  P.>-> updateFileAction
+  P.>-> doAsync
+  P.>-> collect
+  P.>-> P.drain
 
 main :: IO ()
 main = putStrLn "Hello"
