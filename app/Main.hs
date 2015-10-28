@@ -6,6 +6,7 @@ module Main where
 
 import System.Directory
 import System.FilePath
+import System.Environment
 
 import Control.Monad
 import Control.Concurrent.Async
@@ -269,4 +270,6 @@ main' settings prefixes = runSafeT $ P.runEffect $ do
   P.>-> P.drain
 
 main :: IO ()
-main = putStrLn "Hello"
+main = do
+  prefixes <- getArgs
+  main' defaultSettings prefixes
