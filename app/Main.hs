@@ -7,6 +7,8 @@ module Main where
 import System.Directory
 import System.FilePath
 import System.Environment
+import System.Process
+import System.Exit
 
 import Control.Monad
 import Control.Concurrent.Async
@@ -19,7 +21,6 @@ import Data.HashMap.Strict (HashMap)
 import Data.Monoid
 import Data.Either
 import Data.Maybe
-import System.Process
 import qualified Pipes as P
 import qualified Pipes.Prelude as P
 import Pipes.Safe (SafeT, runSafeT, MonadSafe)
@@ -47,11 +48,20 @@ eval c = T.unpack
              DEL k   -> ["del", unKey k]
 
 
-run1cmd :: FilePath -> Exiv2ModifyCommand -> IO ()
-run1cmd imagePath cmd = run
-    where
-      args = ["-M" <> eval cmd, imagePath]
-      run = callProcess "exiv2" args
+data ProcessResult a = Result {
+      cmd :: [Text]
+    , exitCode :: ExitCode
+    , stdout :: Text
+    , stderr :: Text
+    , result :: a
+    } deriving (Eq, Show)
+
+run1cmd :: FilePath -> Exiv2ModifyCommand -> IO (ProcessResult ())
+run1cmd imagePath cmd = do
+  let args = ["-M" <> eval cmd, imagePath]
+      run = readProcessWithExitCode "exiv2" args ""
+  (ec, out, err) <- run
+  return $ Result ("exiv2" : map T.pack args) ec (T.pack out) (T.pack err) ()
 
 
 data Exiv2ModifyCommand = SET XMPKey XMPValue
@@ -238,10 +248,28 @@ createCommands settings = forever $ do
   let pair = picasa2cmd settings img
   P.yield pair
 
-updateFileAction :: P.MonadIO m => P.Pipe (FilePath, [Exiv2ModifyCommand]) (IO ()) m ()
+updateFileAction :: P.MonadIO m => P.Pipe (FilePath, [Exiv2ModifyCommand]) (IO (ProcessResult ())) m ()
 updateFileAction = forever $ do
   (path, cmds) <- P.await
-  P.yield $ mapM_ (run1cmd path) cmds
+  P.liftIO $ putStrLn $ "Updating " <> path
+  let results = map (run1cmd path) cmds
+  mapM_ P.yield results
+
+
+runAction :: P.MonadIO m => P.Pipe (IO a) a m ()
+runAction = forever $ do
+  action <- P.await
+  result <- P.liftIO action
+  P.yield result
+
+processResult :: (Show a, P.MonadIO m) => FilePath -> P.Pipe (ProcessResult a) (Either Text a) m ()
+processResult path = forever $ do
+  r <- P.await
+  case exitCode r of
+    ExitSuccess -> P.yield $ Right $ result r
+    ExitFailure e -> do P.liftIO $ putStrLn $ "FAILURE: " <> show (cmd r)
+                        P.liftIO $ appendFile path $ show r <> "\n"
+                        P.yield $ Left $ stderr r
 
 doAsync :: P.MonadIO m => P.Pipe (IO a) (Async a) m ()
 doAsync = forever $ do
@@ -257,17 +285,17 @@ collect = forever $ do
 
 -- -------------------------------------------------- main
 
-main' :: LightroomSettings -> [FilePath] -> IO ()
-main' settings prefixes = runSafeT $ P.runEffect $ do
+main' :: FilePath -> LightroomSettings -> [FilePath] -> IO ()
+main' logfile settings prefixes = runSafeT $ P.runEffect $ do
   P.for (P.each prefixes) findDotPicasa
   P.>-> loadImages
   P.>-> createCommands settings
   P.>-> updateFileAction
-  P.>-> doAsync
-  P.>-> collect
+  P.>-> runAction
+  P.>-> processResult logfile
   P.>-> P.drain
 
 main :: IO ()
 main = do
   prefixes <- getArgs
-  main' defaultSettings prefixes
+  main' "err.txt" defaultSettings prefixes
