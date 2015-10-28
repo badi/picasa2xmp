@@ -46,6 +46,14 @@ eval c = T.unpack
              ADD k v -> ["add", unKey k] ++ flattenXmpValue v
              DEL k   -> ["del", unKey k]
 
+
+run1cmd :: FilePath -> Exiv2ModifyCommand -> IO ()
+run1cmd imagePath cmd = run
+    where
+      args = ["-M" <> eval cmd, imagePath]
+      run = callProcess "exiv2" args
+
+
 data Exiv2ModifyCommand = SET XMPKey XMPValue
                         | ADD XMPKey XMPValue
                         | DEL XMPKey
@@ -111,23 +119,10 @@ setBag tag typ vals =
     in SET key (XMPValue (Just XmpBag) "") 
        : zipWith add [1..] vals'
 
-dc_caption :: Text -> (XMPKey, XMPValue)
-dc_caption = xmp "Xmp.dc.description" LangAlt
 
-dc_title :: Text -> (XMPKey, XMPValue)
-dc_title = xmp "Xmp.dc.title" LangAlt
-
-xmp_Label :: Text -> (XMPKey, XMPValue)
-xmp_Label = xmp "Xmp.xmp.Label" XmpText
 
 xmp_Rating :: Int -> (XMPKey, XMPValue)
 xmp_Rating = xmp "XMP.xmp.Rating" XmpText . T.pack . show
-
-lr_HierarchicalSubject :: Text -> (XMPKey, XMPValue)
-lr_HierarchicalSubject = xmp "Xmp.lr.HierarchicalSubject" XmpText
-
-lr_hierarchicalSubject_composit :: Int -> Text -> (XMPKey, XMPValue)
-lr_hierarchicalSubject_composit i = xmp ("Xmp.lr.hierarchicalSubject["<> toText i <> "]") XmpText
 
 -- -------------------------------------------------- Picasa
 
@@ -178,6 +173,22 @@ loadPicasaImage picasa_ini_path = do
   ini <- readIniFile path
   return $ rights $ either fail (\ini' -> map (picasaImage ini') files) ini
 
+
+-- -------------------------------------------------- Lightroom
+
+data LightroomSettings = LightroomSettings {
+      albumPrefix :: Text
+    , hierarchySeparator :: Text
+    } deriving (Eq, Show)
+
+defaultSettings :: LightroomSettings
+defaultSettings = LightroomSettings {
+                    albumPrefix = "album"
+                  , hierarchySeparator = "|"
+                  }
+
+-- -------------------------------------------------- picasa -> cmd
+
 picasaStar2cmd :: PicasaImage -> Maybe [Exiv2ModifyCommand]
 picasaStar2cmd p = 
     if star $ metadata p
@@ -201,17 +212,6 @@ picasaAlbums2cmd settings = wrapMaybe . concatMap mk . albums . metadata
       wrapMaybe l = if null l then Nothing else Just l
 
 
-data LightroomSettings = LightroomSettings {
-      albumPrefix :: Text
-    , hierarchySeparator :: Text
-    } deriving (Eq, Show)
-
-defaultSettings :: LightroomSettings
-defaultSettings = LightroomSettings {
-                    albumPrefix = "album"
-                  , hierarchySeparator = "|"
-                  }
-
 picasa2cmd :: LightroomSettings -> PicasaImage -> (FilePath, [Exiv2ModifyCommand])
 picasa2cmd s p = (,) (imagePath p) 
                  $ concat $ catMaybes [
@@ -220,11 +220,7 @@ picasa2cmd s p = (,) (imagePath p)
                  ]
 
 
-run1cmd :: FilePath -> Exiv2ModifyCommand -> IO ()
-run1cmd imagePath cmd = run
-    where
-      args = ["-M" <> eval cmd, imagePath]
-      run = callProcess "exiv2" args
+-- -------------------------------------------------- execution pipeline
 
 findDotPicasa :: FilePath -> P.Producer FilePath (SafeT IO) ()
 findDotPicasa prefix = do
@@ -258,6 +254,8 @@ collect = forever $ do
   forked <- P.await
   result <- P.liftIO $ wait forked
   P.yield result
+
+-- -------------------------------------------------- main
 
 main' :: LightroomSettings -> [FilePath] -> IO ()
 main' settings prefixes = runSafeT $ P.runEffect $ do
