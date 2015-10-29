@@ -132,10 +132,6 @@ setBag tag typ vals =
        : zipWith add [1..] vals'
 
 
-
-xmp_Rating :: Int -> (XMPKey, XMPValue)
-xmp_Rating = xmp "XMP.xmp.Rating" XmpText . T.pack . show
-
 -- -------------------------------------------------- Picasa
 
 
@@ -204,7 +200,7 @@ defaultSettings = LightroomSettings {
 picasaStar2cmd :: PicasaImage -> Maybe [Exiv2ModifyCommand]
 picasaStar2cmd p = 
     if star $ metadata p
-    then Just [uncurry SET $ xmp_Rating 5]
+    then Just [uncurry SET $ xmp "Xmp.xmp.Rating" XmpText "5"]
     else Nothing
 
 picasaAlbums2cmd :: LightroomSettings -> PicasaImage -> Maybe [Exiv2ModifyCommand]
