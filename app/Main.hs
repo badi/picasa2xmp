@@ -267,9 +267,7 @@ runAction = forever $ do
   result <- liftIO action
   yield result
 
--- processResult :: (Show a, MonadIO m) => FilePath -> Pipe (ProcessResult a) (Either Text a) m ()
--- processResult path = forever $ do
---   r <- await
+processResult :: (Show a, MonadIO m) => FilePath -> ProcessResult a -> m (Either Text a)
 processResult path r =
   case exitCode r of
     ExitSuccess -> return $ Right $ result r
