@@ -273,18 +273,6 @@ processResult path = forever $ do
                         P.liftIO $ T.appendFile path $ T.pack $ show r <> "\n"
                         P.yield $ Left $ stderr r
 
-doAsync :: P.MonadIO m => P.Pipe (IO a) (Async a) m ()
-doAsync = forever $ do
-  action <- P.await
-  forked <- P.liftIO $ async action
-  P.yield forked
-
-collect :: P.MonadIO m => P.Pipe (Async a) a m ()
-collect = forever $ do
-  forked <- P.await
-  result <- P.liftIO $ wait forked
-  P.yield result
-
 -- -------------------------------------------------- main
 
 main' :: FilePath -> LightroomSettings -> [FilePath] -> IO ()
