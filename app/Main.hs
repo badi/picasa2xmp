@@ -29,18 +29,21 @@ import Data.Either (rights, lefts)
 import Data.Maybe (catMaybes)
 import Data.Biapplicative (bipure, biliftA2)
 
+-- -------------------------------------------------- misc utils
+
 class ToText a where toText :: a -> Text
 
 instance ToText Int where toText = T.pack . show
 
 -- -------------------------------------------------- Exiv / XMP
 
-list :: a -> [a]
-list a = [a]
-
 flattenXmpValue :: XMPValue -> [Text]
-flattenXmpValue v = maybe [] (list . toText) (valueType v)  ++ txt
+flattenXmpValue v = maybe [] (singleton . toText) (valueType v)  ++ txt
     where txt =  [T.concat ["'", valueText v, "'"]]
+
+          singleton :: a -> [a]
+          singleton a = [a]
+
 
 eval :: Exiv2ModifyCommand -> String
 eval c = T.unpack 
