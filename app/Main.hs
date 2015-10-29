@@ -2,33 +2,32 @@
 
 module Main where
 
-import System.Directory
-import System.FilePath
-import System.Environment
-import System.Process
-import System.Exit
+import System.Directory (makeAbsolute, getDirectoryContents)
+import System.FilePath (takeFileName, takeDirectory, (</>))
+import System.Environment (getArgs)
+import System.Process (readProcessWithExitCode)
+import System.Exit (ExitCode(..))
 
+
+-- reading .ini files (eg .picasa.ini)
+import Data.Ini (Ini, readIniFile, lookupValue)
+
+-- text
+import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
+-- pipes
 import Pipes
 import qualified Pipes.Prelude as P
 import Pipes.Safe (SafeT, runSafeT, MonadSafe)
-import Pipes.Files
+import Pipes.Files (find, filename_, regular)
 
-import Control.Monad
-import Control.Concurrent.Async
-import Data.Text (Text)
-import Data.Ini
---import Data.List
-import qualified Data.HashMap.Strict as H
-import Data.HashMap.Strict (HashMap)
-import Data.Monoid
-import Data.Either
-import Data.Maybe
-
-import Data.Bifunctor
-import Data.Biapplicative
+import Control.Monad (forever)
+import Data.Monoid ((<>))
+import Data.Either (rights, lefts)
+import Data.Maybe (catMaybes)
+import Data.Biapplicative (bipure, biliftA2)
 
 class ToText a where toText :: a -> Text
 
