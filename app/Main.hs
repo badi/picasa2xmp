@@ -10,9 +10,11 @@ import System.Environment
 import System.Process
 import System.Exit
 
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
+
 import Control.Monad
 import Control.Concurrent.Async
-import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Ini
 --import Data.List
@@ -268,7 +270,7 @@ processResult path = forever $ do
   case exitCode r of
     ExitSuccess -> P.yield $ Right $ result r
     ExitFailure e -> do P.liftIO $ putStrLn $ "FAILURE: " <> show (cmd r)
-                        P.liftIO $ appendFile path $ show r <> "\n"
+                        P.liftIO $ T.appendFile path $ T.pack $ show r <> "\n"
                         P.yield $ Left $ stderr r
 
 doAsync :: P.MonadIO m => P.Pipe (IO a) (Async a) m ()
@@ -298,4 +300,6 @@ main' logfile settings prefixes = runSafeT $ P.runEffect $ do
 main :: IO ()
 main = do
   prefixes <- getArgs
-  main' "err.txt" defaultSettings prefixes
+  let errfile = "err.txt"
+  T.writeFile errfile ""
+  main' errfile defaultSettings prefixes
