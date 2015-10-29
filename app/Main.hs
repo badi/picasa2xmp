@@ -29,6 +29,9 @@ import Data.Monoid
 import Data.Either
 import Data.Maybe
 
+import Data.Bifunctor
+import Data.Biapplicative
+
 class ToText a where toText :: a -> Text
 
 instance ToText Int where toText = T.pack . show
@@ -247,13 +250,16 @@ createCommands settings = forever $ do
   let pair = picasa2cmd settings img
   yield pair
 
-updateFileAction :: MonadIO m => Pipe (FilePath, [Exiv2ModifyCommand]) (IO (ProcessResult ())) m ()
+
+updateFileAction :: MonadIO m => Pipe (FilePath, [Exiv2ModifyCommand]) ((FilePath, IO [ProcessResult ()])) m ()
 updateFileAction = forever $ do
   (path, cmds) <- await
   liftIO $ putStrLn $ "Updating " <> path
-  let results = map (run1cmd path) cmds
-  mapM_ yield results
+  let action = mapM (run1cmd path) cmds
+  yield $ (path, action)
 
+strength :: Functor f => (a, f b) -> f (a, b)
+strength (a, fb) = fmap ((,) a) fb
 
 runAction :: MonadIO m => Pipe (IO a) a m ()
 runAction = forever $ do
@@ -261,30 +267,62 @@ runAction = forever $ do
   result <- liftIO action
   yield result
 
-processResult :: (Show a, MonadIO m) => FilePath -> Pipe (ProcessResult a) (Either Text a) m ()
-processResult path = forever $ do
-  r <- await
+-- processResult :: (Show a, MonadIO m) => FilePath -> Pipe (ProcessResult a) (Either Text a) m ()
+-- processResult path = forever $ do
+--   r <- await
+processResult path r =
   case exitCode r of
-    ExitSuccess -> yield $ Right $ result r
+    ExitSuccess -> return $ Right $ result r
     ExitFailure e -> do liftIO $ putStrLn $ "FAILURE: " <> show (cmd r)
                         liftIO $ T.appendFile path $ T.pack $ show r <> "\n"
-                        yield $ Left $ stderr r
+                        return $ Left $ stderr r
 
--- -------------------------------------------------- main
+summarizeFileResults :: Monad m => Pipe (FilePath, [Either Text a]) (Either Text ()) m ()
+summarizeFileResults = forever $ do
+  (path, runResults) <- await
+  yield $ if null (lefts runResults)
+          then Right ()
+          else Left $ "Failure occured while processing " <> T.pack path <> ", check error log for details"
 
-main' :: FilePath -> LightroomSettings -> [FilePath] -> IO ()
-main' logfile settings prefixes = runSafeT $ runEffect $ do
+countLeftRight :: Monad m => Pipe (Either a b) (Int, Int) m ()
+countLeftRight = forever $ do
+  e <- await
+  let l = const (1, 0)
+      r = const (0, 1)
+      t = either l r e
+  yield t
+
+
+pipeline :: Foldable t => FilePath -> LightroomSettings -> t FilePath -> Producer (Either Text ()) (SafeT IO) ()
+pipeline logfile settings prefixes = do
   for (each prefixes) findDotPicasa
   >-> loadImages
   >-> createCommands settings
   >-> updateFileAction
+  >-> P.map strength
   >-> runAction
-  >-> processResult logfile
-  >-> P.drain
+  >-> P.mapM (strength . fmap (mapM (processResult logfile)))
+  >-> summarizeFileResults
+
+
+
+
+-- -- -------------------------------------------------- main
+
+main' :: FilePath -> LightroomSettings -> [FilePath] -> IO (Int, Int)
+main' logfile settings prefixes = runSafeT
+                                  $ P.fold (biliftA2 (+) (+)) (bipure 0 0) id
+                                  $ pipeline logfile settings prefixes
+                                    >-> countLeftRight
 
 main :: IO ()
 main = do
   prefixes <- getArgs
   let errfile = "err.txt"
+
   T.writeFile errfile ""
-  main' errfile defaultSettings prefixes
+  (failures, successes) <- main' errfile defaultSettings prefixes
+
+  putStrLn $ "Processed  " <> show (failures + successes) <> " files."
+  putStrLn $ "Failures:  " <> show failures
+  putStrLn $ "Successes: " <> show successes

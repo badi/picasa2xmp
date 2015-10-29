@@ -32,6 +32,7 @@ executable picasa2xmp
                      , filepath
                      , process
                      , async
+                     , bifunctors
                      , pipes
                      , pipes-safe
                      , pipes-files
