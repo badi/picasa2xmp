@@ -13,6 +13,11 @@ import System.Exit
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
+import Pipes
+import qualified Pipes.Prelude as P
+import Pipes.Safe (SafeT, runSafeT, MonadSafe)
+import Pipes.Files
+
 import Control.Monad
 import Control.Concurrent.Async
 import Data.Text (Text)
@@ -23,10 +28,6 @@ import Data.HashMap.Strict (HashMap)
 import Data.Monoid
 import Data.Either
 import Data.Maybe
-import qualified Pipes as P
-import qualified Pipes.Prelude as P
-import Pipes.Safe (SafeT, runSafeT, MonadSafe)
-import Pipes.Files
 
 class ToText a where toText :: a -> Text
 
@@ -230,56 +231,56 @@ picasa2cmd s p = (,) (imagePath p)
 
 -- -------------------------------------------------- execution pipeline
 
-findDotPicasa :: FilePath -> P.Producer FilePath (SafeT IO) ()
+findDotPicasa :: FilePath -> Producer FilePath (SafeT IO) ()
 findDotPicasa prefix = do
   find prefix (filename_ (==".picasa.ini") <> regular)
 
-loadImages :: P.MonadIO m => P.Pipe FilePath PicasaImage m ()
+loadImages :: MonadIO m => Pipe FilePath PicasaImage m ()
 loadImages = forever $ do
-  path <- P.await
-  imgs <- P.liftIO $ loadPicasaImage path
-  mapM_ P.yield imgs
+  path <- await
+  imgs <- liftIO $ loadPicasaImage path
+  mapM_ yield imgs
 
-createCommands :: P.MonadIO m => LightroomSettings -> P.Pipe PicasaImage (FilePath, [Exiv2ModifyCommand]) m ()
+createCommands :: MonadIO m => LightroomSettings -> Pipe PicasaImage (FilePath, [Exiv2ModifyCommand]) m ()
 createCommands settings = forever $ do
-  img <- P.await
+  img <- await
   let pair = picasa2cmd settings img
-  P.yield pair
+  yield pair
 
-updateFileAction :: P.MonadIO m => P.Pipe (FilePath, [Exiv2ModifyCommand]) (IO (ProcessResult ())) m ()
+updateFileAction :: MonadIO m => Pipe (FilePath, [Exiv2ModifyCommand]) (IO (ProcessResult ())) m ()
 updateFileAction = forever $ do
-  (path, cmds) <- P.await
-  P.liftIO $ putStrLn $ "Updating " <> path
+  (path, cmds) <- await
+  liftIO $ putStrLn $ "Updating " <> path
   let results = map (run1cmd path) cmds
-  mapM_ P.yield results
+  mapM_ yield results
 
 
-runAction :: P.MonadIO m => P.Pipe (IO a) a m ()
+runAction :: MonadIO m => Pipe (IO a) a m ()
 runAction = forever $ do
-  action <- P.await
-  result <- P.liftIO action
-  P.yield result
+  action <- await
+  result <- liftIO action
+  yield result
 
-processResult :: (Show a, P.MonadIO m) => FilePath -> P.Pipe (ProcessResult a) (Either Text a) m ()
+processResult :: (Show a, MonadIO m) => FilePath -> Pipe (ProcessResult a) (Either Text a) m ()
 processResult path = forever $ do
-  r <- P.await
+  r <- await
   case exitCode r of
-    ExitSuccess -> P.yield $ Right $ result r
-    ExitFailure e -> do P.liftIO $ putStrLn $ "FAILURE: " <> show (cmd r)
-                        P.liftIO $ T.appendFile path $ T.pack $ show r <> "\n"
-                        P.yield $ Left $ stderr r
+    ExitSuccess -> yield $ Right $ result r
+    ExitFailure e -> do liftIO $ putStrLn $ "FAILURE: " <> show (cmd r)
+                        liftIO $ T.appendFile path $ T.pack $ show r <> "\n"
+                        yield $ Left $ stderr r
 
 -- -------------------------------------------------- main
 
 main' :: FilePath -> LightroomSettings -> [FilePath] -> IO ()
-main' logfile settings prefixes = runSafeT $ P.runEffect $ do
-  P.for (P.each prefixes) findDotPicasa
-  P.>-> loadImages
-  P.>-> createCommands settings
-  P.>-> updateFileAction
-  P.>-> runAction
-  P.>-> processResult logfile
-  P.>-> P.drain
+main' logfile settings prefixes = runSafeT $ runEffect $ do
+  for (each prefixes) findDotPicasa
+  >-> loadImages
+  >-> createCommands settings
+  >-> updateFileAction
+  >-> runAction
+  >-> processResult logfile
+  >-> P.drain
 
 main :: IO ()
 main = do
