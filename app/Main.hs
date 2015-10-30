@@ -232,12 +232,12 @@ picasaAlbums2cmd settings = wrapMaybe . concatMap mk . albums . metadata
       mk :: PicasaAlbum -> [Exiv2ModifyCommand]
       mk a = 
         let tags = [albumPrefix settings, time, albumName a]
-            kwds = T.intercalate (hierarchySeparator settings) tags : tags
+            kwds = T.intercalate (hierarchySeparator settings) tags
             time = T.pack $ formatTime defaultTimeLocale yearFormat $ albumCreateDate a
         in concat [
              [uncurry SET $ xmp "Xmp.lr.HierarchicalSubject" XmpText (albumPrefix settings)]
            , setBag "Xmp.dc.subject" XmpText tags
-           , setBag "Xmp.lr.hierarchicalSubject" XmpText kwds
+           , setBag "Xmp.lr.hierarchicalSubject" XmpText [kwds]
            ]
 
       wrapMaybe :: [a] -> Maybe [a]
