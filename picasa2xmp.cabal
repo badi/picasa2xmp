@@ -33,6 +33,8 @@ executable picasa2xmp
                      , process
                      , async
                      , bifunctors
+                     , utc
+                     , time
                      , pipes
                      , pipes-safe
                      , pipes-files

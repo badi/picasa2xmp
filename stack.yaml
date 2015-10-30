@@ -6,4 +6,5 @@ extra-deps:
 - hierarchy-0.3.1
 - pipes-files-0.1.1
 - posix-paths-0.2.1.0
+- utc-0.2.0.1
 resolver: lts-3.10

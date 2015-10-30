@@ -29,11 +29,21 @@ import Data.Either (rights, lefts)
 import Data.Maybe (catMaybes)
 import Data.Biapplicative (bipure, biliftA2)
 
+import Data.Time (UTCTime, formatTime, parseTimeM, defaultTimeLocale)
+
+
 -- -------------------------------------------------- misc utils
 
 class ToText a where toText :: a -> Text
 
 instance ToText Int where toText = T.pack . show
+
+-- format string according to <http://tools.ietf.org/html/rfc3339#section-5.6 RFC3339>
+rfc3339Format :: String
+rfc3339Format = "%FT%T%z"
+
+yearFormat :: String
+yearFormat = "%Y"
 
 -- -------------------------------------------------- Exiv / XMP
 
@@ -142,6 +152,7 @@ setBag tag typ vals =
 data PicasaAlbum = PicasaAlbum {
       albumId :: Text
     , albumName :: Text
+    , albumCreateDate :: UTCTime
     } deriving (Eq, Show)
 
 
@@ -171,8 +182,16 @@ picasaImage ini path = do
   return $ PicasaImage path metadata
 
 picasaAlbum :: Ini -> Text -> Either String PicasaAlbum
-picasaAlbum ini aid = PicasaAlbum <$> pure aid <*> name
-    where name = lookupValue (".album:"<>aid) "name" ini
+picasaAlbum ini aid = PicasaAlbum <$> pure aid <*> name <*> time
+    where section = ".album:" <> aid
+          name = lookupValue section "name" ini
+          date = lookupValue section "date" ini
+          time = squash $ parseTimeM False defaultTimeLocale rfc3339Format . T.unpack <$> date
+
+          squash :: Either String (Maybe b) -> Either String b
+          squash (Left e) = Left e
+          squash (Right Nothing) = Left $ "Failed to parse date " <> show date
+          squash (Right (Just d)) = Right d
 
 
 loadPicasaImage :: FilePath -> IO [PicasaImage]
@@ -212,8 +231,9 @@ picasaAlbums2cmd settings = wrapMaybe . concatMap mk . albums . metadata
     where
       mk :: PicasaAlbum -> [Exiv2ModifyCommand]
       mk a = 
-        let tags = [albumPrefix settings, albumName a]
+        let tags = [albumPrefix settings, time, albumName a]
             kwds = T.intercalate (hierarchySeparator settings) tags : tags
+            time = T.pack $ formatTime defaultTimeLocale yearFormat $ albumCreateDate a
         in concat [
              [uncurry SET $ xmp "Xmp.lr.HierarchicalSubject" XmpText (albumPrefix settings)]
            , setBag "Xmp.dc.subject" XmpText tags
