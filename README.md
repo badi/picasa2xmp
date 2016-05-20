@@ -1,7 +1,7 @@
 # picasa2xmp
 Write Picasa metadata to XMP for import into other image management programs
 
-This came about when I needed to migrate from Google's [Picasa] to an alternative.
+This came about when I needed to migrate from Google's [Picasa] to an alternative and was hacked together over the course of a brief vacation.
 The challenge was that Picasa had its own way of storing image metadata that was could not be imported by other image collection software.
 After some research, I discovered that [xmp] is a standard way of encoding the metadata directly into the image files.
 
